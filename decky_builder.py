@@ -1,3 +1,83 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+def cleanup_mei():
+    import os
+    import glob
+    import shutil
+    import time
+    import ctypes
+    from ctypes import wintypes
+    import stat
+    import psutil
+    import win32api
+    import win32con
+
+    def force_delete_directory(path):
+        try:
+            # Get all processes that might have handles to files in the directory
+            for proc in psutil.process_iter(['pid', 'name', 'open_files']):
+                try:
+                    # Check if process has any open files in our target directory
+                    for f in proc.open_files():
+                        if path in f.path:
+                            try:
+                                # Try to close handles gracefully first
+                                proc.open_files().remove(f)
+                            except:
+                                pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+
+            # Set directory attributes to normal
+            win32api.SetFileAttributes(path, win32con.FILE_ATTRIBUTE_NORMAL)
+            
+            # Change permissions to allow deletion
+            for root, dirs, files in os.walk(path):
+                for d in dirs:
+                    try:
+                        full_path = os.path.join(root, d)
+                        win32api.SetFileAttributes(full_path, win32con.FILE_ATTRIBUTE_NORMAL)
+                        os.chmod(full_path, stat.S_IRWXU)
+                    except:
+                        pass
+                for f in files:
+                    try:
+                        full_path = os.path.join(root, f)
+                        win32api.SetFileAttributes(full_path, win32con.FILE_ATTRIBUTE_NORMAL)
+                        os.chmod(full_path, stat.S_IRWXU)
+                    except:
+                        pass
+
+            # Remove the directory
+            shutil.rmtree(path, ignore_errors=True)
+            return True
+        except Exception as e:
+            print(f"Warning: Failed to remove directory {path}: {e}")
+            return False
+
+    try:
+        # Get the MEI directory pattern
+        temp_dir = os.environ.get('TEMP', '')
+        mei_pattern = os.path.join(temp_dir, '_MEI*')
+        
+        # Find and remove all MEI directories
+        for mei_dir in glob.glob(mei_pattern):
+            if os.path.exists(mei_dir):
+                force_delete_directory(mei_dir)
+                # Double check if it's gone
+                if os.path.exists(mei_dir):
+                    # If still exists, try to mark it for deletion on reboot
+                    try:
+                        win32api.MoveFileEx(
+                            mei_dir,
+                            None,
+                            win32con.MOVEFILE_DELAY_UNTIL_REBOOT
+                        )
+                    except:
+                        pass
+    except Exception as e:
+        print(f"Warning: Error during MEI cleanup: {e}")
+
 import os
 import subprocess
 import shutil
@@ -292,10 +372,22 @@ class DeckyBuilder:
             requirements_file = self.app_dir / "backend" / "requirements.txt"
             pyproject_file = self.app_dir / "backend" / "pyproject.toml"
             
+            # Windows-specific dependencies for proper cleanup
+            windows_deps = [
+                "pywin32>=305",
+                "psutil>=5.9.0",
+                "winregistry>=1.1.1; platform_system == 'Windows'"
+            ]
+            
             if requirements_file.exists():
                 subprocess.run([
                     sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements_file)
                 ], check=True)
+                # Install Windows-specific deps
+                for dep in windows_deps:
+                    subprocess.run([
+                        sys.executable, "-m", "pip", "install", "--user", dep
+                    ], check=True)
             elif pyproject_file.exists():
                 # Install core dependencies directly instead of using poetry
                 dependencies = [
@@ -309,23 +401,18 @@ class DeckyBuilder:
                     "setuptools>=60.0.0",
                     "wheel>=0.37.1",
                     "winregistry>=1.1.1; platform_system == 'Windows'",
-                    "pywin32>=303; platform_system == 'Windows'"
+                    "pywin32>=305; platform_system == 'Windows'"  # Added for Windows cleanup
                 ]
                 
-                # Install each dependency
                 for dep in dependencies:
-                    try:
-                        subprocess.run([
-                            sys.executable, "-m", "pip", "install", "--user", dep
-                        ], check=True)
-                    except subprocess.CalledProcessError as e:
-                        print(f"Warning: Failed to install {dep}: {str(e)}")
-                        continue
+                    subprocess.run([
+                        sys.executable, "-m", "pip", "install", "--user", dep
+                    ], check=True)
             else:
-                print("Warning: No requirements.txt or pyproject.toml found")
-        except Exception as e:
-            print(f"Error installing requirements: {str(e)}")
-            raise
+                raise Exception("No requirements.txt or pyproject.toml found")
+                
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Failed to install requirements: {str(e)}")
 
     def add_defender_exclusion(self, path):
         """Add Windows Defender exclusion for a path"""
@@ -389,6 +476,57 @@ def cleanup_mei():
     import os
     import glob
     import shutil
+    import time
+    import ctypes
+    from ctypes import wintypes
+    import stat
+    import psutil
+    import win32api
+    import win32con
+
+    def force_delete_directory(path):
+        try:
+            # Get all processes that might have handles to files in the directory
+            for proc in psutil.process_iter(['pid', 'name', 'open_files']):
+                try:
+                    # Check if process has any open files in our target directory
+                    for f in proc.open_files():
+                        if path in f.path:
+                            try:
+                                # Try to close handles gracefully first
+                                proc.open_files().remove(f)
+                            except:
+                                pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+
+            # Set directory attributes to normal
+            win32api.SetFileAttributes(path, win32con.FILE_ATTRIBUTE_NORMAL)
+            
+            # Change permissions to allow deletion
+            for root, dirs, files in os.walk(path):
+                for d in dirs:
+                    try:
+                        full_path = os.path.join(root, d)
+                        win32api.SetFileAttributes(full_path, win32con.FILE_ATTRIBUTE_NORMAL)
+                        os.chmod(full_path, stat.S_IRWXU)
+                    except:
+                        pass
+                for f in files:
+                    try:
+                        full_path = os.path.join(root, f)
+                        win32api.SetFileAttributes(full_path, win32con.FILE_ATTRIBUTE_NORMAL)
+                        os.chmod(full_path, stat.S_IRWXU)
+                    except:
+                        pass
+
+            # Remove the directory
+            shutil.rmtree(path, ignore_errors=True)
+            return True
+        except Exception as e:
+            print(f"Warning: Failed to remove directory {path}: {e}")
+            return False
+
     try:
         # Get the MEI directory pattern
         temp_dir = os.environ.get('TEMP', '')
@@ -396,13 +534,21 @@ def cleanup_mei():
         
         # Find and remove all MEI directories
         for mei_dir in glob.glob(mei_pattern):
-            try:
+            if os.path.exists(mei_dir):
+                force_delete_directory(mei_dir)
+                # Double check if it's gone
                 if os.path.exists(mei_dir):
-                    shutil.rmtree(mei_dir, ignore_errors=True)
-            except:
-                pass
-    except:
-        pass
+                    # If still exists, try to mark it for deletion on reboot
+                    try:
+                        win32api.MoveFileEx(
+                            mei_dir,
+                            None,
+                            win32con.MOVEFILE_DELAY_UNTIL_REBOOT
+                        )
+                    except:
+                        pass
+    except Exception as e:
+        print(f"Warning: Error during MEI cleanup: {e}")
 
 import os
 import atexit
