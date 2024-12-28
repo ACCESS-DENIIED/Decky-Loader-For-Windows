@@ -364,7 +364,6 @@ class DeckyBuilder:
             version = f.read().strip()
             
         # Normalize version for Python packaging
-        # Convert v3.0.5-pre1 to 3.0.5rc1
         py_version = version.lstrip('v')  # Remove v prefix
         if '-pre' in py_version:
             py_version = py_version.replace('-pre', 'rc')
@@ -373,7 +372,6 @@ class DeckyBuilder:
         
         original_dir = os.getcwd()
         backend_dir = os.path.join(self.app_dir, "backend")
-        dist_dir = os.path.join(backend_dir, "dist")
         
         # Add Windows Defender exclusion for build directories
         added_exclusion = self.add_defender_exclusion(backend_dir)
@@ -381,37 +379,84 @@ class DeckyBuilder:
         try:
             os.chdir(backend_dir)
             
-            # Create setup.py with the correct version
-            setup_py = """
-            from setuptools import setup, find_packages
+            # Clean up any existing PyInstaller artifacts first
+            self.cleanup()
             
-            setup(
-                name="decky_loader",
-                version="%s",
-                packages=find_packages(),
-                package_data={
-                    'decky_loader': [
-                        'locales/*',
-                        'static/*',
-                        '.loader.version'
-                    ],
-                },
-                install_requires=[
-                    'aiohttp>=3.8.1',
-                    'certifi>=2022.6.15',
-                    'packaging>=21.3',
-                    'psutil>=5.9.1',
-                    'requests>=2.28.1',
-                ],
-            )
-            """ % py_version
+            # Create PyInstaller spec file with runtime cleanup
+            spec_content = """# -*- mode: python ; coding: utf-8 -*-
 
-            with open("setup.py", "w") as f:
-                f.write(setup_py)
+def cleanup_mei():
+    import os
+    import glob
+    import shutil
+    try:
+        # Get the MEI directory pattern
+        temp_dir = os.environ.get('TEMP', '')
+        mei_pattern = os.path.join(temp_dir, '_MEI*')
+        
+        # Find and remove all MEI directories
+        for mei_dir in glob.glob(mei_pattern):
+            try:
+                if os.path.exists(mei_dir):
+                    shutil.rmtree(mei_dir, ignore_errors=True)
+            except:
+                pass
+    except:
+        pass
+
+import os
+import atexit
+
+# Register cleanup function
+atexit.register(cleanup_mei)
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=[],
+    datas=[('decky_loader/static', 'decky_loader/static'),
+           ('decky_loader/locales', 'decky_loader/locales'),
+           ('decky_loader/plugin', 'decky_loader/plugin'),
+           ('.loader.version', '.')],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data)
+
+exe_name = 'PluginLoader_noconsole.exe' if os.environ.get('DECKY_NOCONSOLE') else 'PluginLoader.exe'
+console = not bool(os.environ.get('DECKY_NOCONSOLE'))
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name=exe_name,
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=console,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)"""
+            # Write the spec file
+            with open("pyinstaller.spec", "w") as f:
+                f.write(spec_content)
                 
-            # Install the package in development mode
-            subprocess.run([sys.executable, "-m", "pip", "install", "-e", "."], check=True)
-            
             # Common PyInstaller arguments
             pyinstaller_args = [
                 sys.executable,
@@ -437,30 +482,46 @@ class DeckyBuilder:
             
             # Copy the built executables to dist
             os.makedirs(os.path.join(self.root_dir, "dist"), exist_ok=True)
-            if os.path.exists(os.path.join("dist", "PluginLoader.exe")):
+            backend_dist = os.path.join(backend_dir, "dist")
+            
+            # Look for executables in the backend dist directory
+            console_exe = os.path.join(backend_dist, "PluginLoader.exe")
+            noconsole_exe = os.path.join(backend_dist, "PluginLoader_noconsole.exe")
+            
+            # Copy console version if it exists
+            if os.path.exists(console_exe):
                 shutil.copy2(
-                    os.path.join("dist", "PluginLoader.exe"),
+                    console_exe,
                     os.path.join(self.root_dir, "dist", "PluginLoader.exe")
                 )
+                print("Successfully built PluginLoader.exe")
             else:
-                raise Exception("PluginLoader.exe not found after build")
+                raise Exception(f"PluginLoader.exe not found at {console_exe}")
                 
-            if os.path.exists(os.path.join("dist", "PluginLoader_noconsole.exe")):
+            # Copy no-console version if it exists
+            if os.path.exists(noconsole_exe):
                 shutil.copy2(
-                    os.path.join("dist", "PluginLoader_noconsole.exe"),
+                    noconsole_exe,
                     os.path.join(self.root_dir, "dist", "PluginLoader_noconsole.exe")
                 )
+                print("Successfully built PluginLoader_noconsole.exe")
             else:
-                raise Exception("PluginLoader_noconsole.exe not found after build")
-                
+                print(f"Warning: PluginLoader_noconsole.exe not found at {noconsole_exe}")
+            
             print("Successfully built executables")
             
         except subprocess.CalledProcessError as e:
+            print(f"Command failed: {e.cmd}")
+            print(f"Output: {e.output}")
+            print(f"Error: {e.stderr}")
             raise Exception(f"Failed to build executables: {str(e)}")
+        except Exception as e:
+            print(f"Error building executables: {str(e)}")
+            raise
         finally:
+            os.chdir(original_dir)
             if added_exclusion:
                 self.remove_defender_exclusion(backend_dir)
-            os.chdir(original_dir)
 
     def install_files(self):
         """Install files to homebrew directory"""
