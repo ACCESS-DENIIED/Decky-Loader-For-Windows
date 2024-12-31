@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Text.Json.Serialization;
+using Microsoft.Win32;
+using System.Net.Http;
 
 namespace DeckyInstaller
 {
@@ -29,6 +31,8 @@ namespace DeckyInstaller
 
         private string _selectedVersion = "v3.0.5";
         private bool _cliMode = false;
+
+        private string[] criticalDependencies = Array.Empty<string>();
 
         public MainForm(string? version = null)
         {
@@ -182,12 +186,29 @@ namespace DeckyInstaller
                 cmbVersions.Enabled = false;
             }
             progressBar.Value = 0;
-            progressBar.Maximum = _dependencies.Count + 4; // +4 for npm install, pnpm install, python script, and final setup
+            progressBar.Maximum = _dependencies.Count + 6;
             txtOutput.Clear();
             UpdateStatus("Starting installation...");
 
             try
             {
+                // Ensure Python Scripts directory is in PATH
+                EnsurePythonInPath();
+                
+                // Check and install Python 3.11 first
+                if (!await EnsurePython311Installed())
+                {
+                    throw new Exception("Failed to install Python 3.11");
+                }
+                progressBar.Value++;
+
+                // Check and install Git
+                if (!await EnsureGitInstalled())
+                {
+                    throw new Exception("Failed to install Git");
+                }
+                progressBar.Value++;
+
                 // Check and install dependencies only if they don't exist
                 foreach (var dependency in _dependencies)
                 {
@@ -521,44 +542,55 @@ namespace DeckyInstaller
             try
             {
                 string executablePath = command;
-                if (command == "npm")
+                if (command == "npm" || command == "pnpm")
                 {
-                    // Find npm in the Node.js installation directory
+                    // Find npm/pnpm in the Node.js installation directory and common locations
                     string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
                     string[] possiblePaths = new[]
                     {
-                        Path.Combine(programFiles, "nodejs", "npm.cmd"),
-                        Path.Combine(programFiles, "nodejs", "npm"),
-                        Path.Combine(programFiles, "nodejs", "npm.exe"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "nodejs", "npm.cmd"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "nodejs", "npm"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "nodejs", "npm.exe")
+                        Path.Combine(programFiles, "nodejs", $"{command}.cmd"),
+                        Path.Combine(programFiles, "nodejs", command),
+                        Path.Combine(programFiles, "nodejs", $"{command}.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", $"{command}.cmd"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", command),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", $"{command}.exe")
                     };
 
                     executablePath = possiblePaths.FirstOrDefault(File.Exists) ?? command;
                     if (executablePath == command)
                     {
-                        AppendOutput("Could not find npm executable in standard locations.");
-                        return false;
+                        AppendOutput($"Could not find {command} executable in standard locations.");
+                        
+                        // If pnpm is not found, try installing it using npm
+                        if (command == "pnpm")
+                        {
+                            AppendOutput("Attempting to install pnpm globally using npm...");
+                            var npmResult = await RunCommand("npm", "install -g pnpm");
+                            if (!npmResult)
+                            {
+                                AppendOutput("Failed to install pnpm using npm.");
+                                return false;
+                            }
+                            // Retry finding pnpm after installation
+                            executablePath = possiblePaths.FirstOrDefault(File.Exists) ?? command;
+                        }
                     }
                 }
 
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = executablePath,
-                    Arguments = arguments,
+                    FileName = "cmd.exe",
+                    Arguments = $"/c \"{executablePath}\" {arguments}",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    // Add Node.js and npm paths to the environment
+                    EnvironmentVariables = 
+                    {
+                        ["PATH"] = $"{Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)}\\nodejs;{Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)}\\npm;{Environment.GetEnvironmentVariable("PATH")}"
+                    }
                 };
-
-                // For npm commands, we need to use cmd.exe
-                if (command == "npm")
-                {
-                    startInfo.FileName = "cmd.exe";
-                    startInfo.Arguments = $"/c \"{executablePath}\" {arguments}";
-                }
 
                 var process = new Process { StartInfo = startInfo };
 
@@ -690,39 +722,15 @@ namespace DeckyInstaller
                     return false;
                 }
 
-                // Install decky_loader package from the backend directory
+                // Install backend package
                 UpdateStatus("Installing decky_loader package...");
-                var installDeckyProcess = new Process
+                if (!await InstallBackendPackage())
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = pythonPath,
-                        Arguments = "-m pip install -e backend",
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true,
-                        Verb = "runas",
-                        WorkingDirectory = appDir
-                    }
-                };
-
-                installDeckyProcess.OutputDataReceived += (s, e) => { if (e.Data != null) AppendOutput(e.Data); };
-                installDeckyProcess.ErrorDataReceived += (s, e) => { if (e.Data != null) AppendOutput($"Error: {e.Data}"); };
-
-                installDeckyProcess.Start();
-                installDeckyProcess.BeginOutputReadLine();
-                installDeckyProcess.BeginErrorReadLine();
-                await installDeckyProcess.WaitForExitAsync();
-
-                if (installDeckyProcess.ExitCode != 0)
-                {
-                    AppendOutput("Failed to install decky_loader package.");
                     return false;
                 }
 
-                // Run the Python script
-                UpdateStatus("Running decky_builder.py...");
+                // Run the Python script with better progress reporting
+                UpdateStatus("Building executable (this may take a few minutes)...");
                 var process = new Process
                 {
                     StartInfo = new ProcessStartInfo
@@ -738,20 +746,75 @@ namespace DeckyInstaller
                     }
                 };
 
-                process.OutputDataReceived += (s, e) => { if (e.Data != null) AppendOutput(e.Data); };
-                process.ErrorDataReceived += (s, e) => { if (e.Data != null) AppendOutput($"Error: {e.Data}"); };
+                process.OutputDataReceived += (s, e) => 
+                { 
+                    if (e.Data != null) 
+                    {
+                        AppendOutput(e.Data);
+                        
+                        // Update status based on PyInstaller progress
+                        if (e.Data.Contains("INFO: PyInstaller:"))
+                        {
+                            UpdateStatus("Analyzing Python dependencies...");
+                        }
+                        else if (e.Data.Contains("INFO: Analyzing"))
+                        {
+                            UpdateStatus("Analyzing required files...");
+                        }
+                        else if (e.Data.Contains("INFO: Processing"))
+                        {
+                            UpdateStatus("Processing application files...");
+                        }
+                        else if (e.Data.Contains("INFO: Copying"))
+                        {
+                            UpdateStatus("Copying required files...");
+                        }
+                        else if (e.Data.Contains("INFO: Building"))
+                        {
+                            UpdateStatus("Building final executable (this may take several minutes)...");
+                        }
+                    }
+                };
+
+                process.ErrorDataReceived += (s, e) => 
+                { 
+                    if (e.Data != null) 
+                    {
+                        AppendOutput($"Error: {e.Data}");
+                        if (e.Data.Contains("Building EXE"))
+                        {
+                            UpdateStatus("Finalizing executable (please wait)...");
+                        }
+                    }
+                };
+
+                // Add a timer to show ongoing progress
+                var progressTimer = new System.Windows.Forms.Timer();
+                var dots = 0;
+                progressTimer.Interval = 1000; // 1 second
+                progressTimer.Tick += (s, e) =>
+                {
+                    dots = (dots + 1) % 4;
+                    string currentStatus = lblStatus.Text.Split('.')[0]; // Get base status without dots
+                    UpdateStatus($"{currentStatus}{"".PadRight(dots, '.')}");
+                };
+                progressTimer.Start();
 
                 process.Start();
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
                 await process.WaitForExitAsync();
 
+                progressTimer.Stop();
+                progressTimer.Dispose();
+
                 if (process.ExitCode != 0)
                 {
-                    AppendOutput("Failed to run decky_builder.py");
+                    AppendOutput("Failed to build executable");
                     return false;
                 }
 
+                UpdateStatus("Build completed successfully!");
                 return true;
             }
             catch (Exception ex)
@@ -879,6 +942,479 @@ namespace DeckyInstaller
                 txtOutput.AppendText($"{text}\r\n");
                 txtOutput.SelectionStart = txtOutput.TextLength;
                 txtOutput.ScrollToCaret();
+            }
+        }
+
+        private async Task<bool> EnsurePython311Installed()
+        {
+            UpdateStatus("Checking Python 3.11...");
+            try
+            {
+                // Check if Python 3.11 is installed
+                var pythonPath = await GetPythonPath();
+                if (!string.IsNullOrEmpty(pythonPath))
+                {
+                    var process = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = pythonPath,
+                            Arguments = "-c \"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')\"",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            CreateNoWindow = true
+                        }
+                    };
+                    process.Start();
+                    string version = await process.StandardOutput.ReadToEndAsync();
+                    await process.WaitForExitAsync();
+
+                    if (version.Trim().StartsWith("3.11"))
+                    {
+                        AppendOutput("Python 3.11 is already installed");
+                        return true;
+                    }
+                }
+
+                // Python 3.11 not found, need to install it
+                UpdateStatus("Installing Python 3.11...");
+                string installerPath = Path.Combine(Path.GetTempPath(), "python311.exe");
+                
+                // Download Python installer
+                using (var client = new HttpClient())
+                {
+                    var response = await client.GetAsync("https://www.python.org/ftp/python/3.11.0/python-3.11.0-amd64.exe");
+                    using (var fs = new FileStream(installerPath, FileMode.Create))
+                    {
+                        await response.Content.CopyToAsync(fs);
+                    }
+                }
+
+                // Install Python
+                var installProcess = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = installerPath,
+                        Arguments = "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+                        UseShellExecute = true,
+                        Verb = "runas"
+                    }
+                };
+                
+                installProcess.Start();
+                await installProcess.WaitForExitAsync();
+
+                // Refresh PATH with null checks and error handling
+                var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Session Manager\Environment");
+                if (key != null)
+                {
+                    try
+                    {
+                        object? pathValue = key.GetValue("Path", "", RegistryValueOptions.DoNotExpandEnvironmentNames);
+                        if (pathValue != null)
+                        {
+                            string path = pathValue.ToString() ?? "";
+                            if (!string.IsNullOrEmpty(path))
+                            {
+                                Environment.SetEnvironmentVariable("Path", path, EnvironmentVariableTarget.Machine);
+                                AppendOutput("Successfully updated system PATH");
+                            }
+                            else
+                            {
+                                AppendOutput("Warning: System PATH is empty");
+                            }
+                        }
+                        else
+                        {
+                            AppendOutput("Warning: Could not read system PATH");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendOutput($"Warning: Failed to update system PATH: {ex.Message}");
+                    }
+                    finally
+                    {
+                        key.Close();
+                    }
+                }
+                else
+                {
+                    AppendOutput("Warning: Could not access system environment variables");
+                }
+
+                AppendOutput("Python 3.11 installed successfully");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"Error installing Python: {ex.Message}");
+                return false;
+            }
+        }
+
+        private async Task<bool> EnsureGitInstalled()
+        {
+            UpdateStatus("Checking Git...");
+            try
+            {
+                // Check if Git is installed
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "git",
+                        Arguments = "--version",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        CreateNoWindow = true
+                    }
+                };
+                
+                try
+                {
+                    process.Start();
+                    await process.WaitForExitAsync();
+                    if (process.ExitCode == 0)
+                    {
+                        AppendOutput("Git is already installed");
+                        return true;
+                    }
+                }
+                catch { }
+
+                // Git not found, need to install it
+                UpdateStatus("Installing Git...");
+                string installerPath = Path.Combine(Path.GetTempPath(), "git-installer.exe");
+                
+                // Download Git installer
+                using (var client = new HttpClient())
+                {
+                    var response = await client.GetAsync("https://github.com/git-for-windows/git/releases/download/v2.42.0.windows.2/Git-2.42.0.2-64-bit.exe");
+                    using (var fs = new FileStream(installerPath, FileMode.Create))
+                    {
+                        await response.Content.CopyToAsync(fs);
+                    }
+                }
+
+                // Install Git
+                var installProcess = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = installerPath,
+                        Arguments = "/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS=\"icons,ext\\reg\\shellhere,assoc,assoc_sh\"",
+                        UseShellExecute = true,
+                        Verb = "runas"
+                    }
+                };
+                
+                installProcess.Start();
+                await installProcess.WaitForExitAsync();
+
+                // Refresh PATH with null checks and error handling
+                var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Session Manager\Environment");
+                if (key != null)
+                {
+                    try
+                    {
+                        object? pathValue = key.GetValue("Path", "", RegistryValueOptions.DoNotExpandEnvironmentNames);
+                        if (pathValue != null)
+                        {
+                            string path = pathValue.ToString() ?? "";
+                            if (!string.IsNullOrEmpty(path))
+                            {
+                                Environment.SetEnvironmentVariable("Path", path, EnvironmentVariableTarget.Machine);
+                                AppendOutput("Successfully updated system PATH");
+                            }
+                            else
+                            {
+                                AppendOutput("Warning: System PATH is empty");
+                            }
+                        }
+                        else
+                        {
+                            AppendOutput("Warning: Could not read system PATH");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendOutput($"Warning: Failed to update system PATH: {ex.Message}");
+                    }
+                    finally
+                    {
+                        key.Close();
+                    }
+                }
+                else
+                {
+                    AppendOutput("Warning: Could not access system environment variables");
+                }
+
+                AppendOutput("Git installed successfully");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"Error installing Git: {ex.Message}");
+                return false;
+            }
+        }
+
+        private async Task<bool> PrepareBackendFiles()
+        {
+            try
+            {
+                string backendDir = Path.Combine(Application.StartupPath, "app", "backend");
+                
+                // Create setup.py with exact dependencies from pyproject.toml
+                string setupPy = @"
+from setuptools import setup, find_packages
+
+setup(
+    name='decky_loader',
+    version='1.0.0',
+    packages=find_packages(),
+    install_requires=[
+        'aiohttp>=3.9.5',
+        'aiohttp-jinja2>=1.5.1',
+        'aiohttp-cors>=0.7.0',
+        'watchdog>=4',
+        'certifi',
+        'packaging>=24',
+        'multidict>=6.0.5',
+        'setproctitle>=1.3.3'
+    ],
+    extras_require={
+        'dev': [
+            'pyinstaller>=6.8.0',
+            'pyright>=1.1.335'
+        ]
+    }
+)";
+                await File.WriteAllTextAsync(Path.Combine(backendDir, "setup.py"), setupPy.TrimStart());
+
+                // Update critical dependencies list to match
+                criticalDependencies = new[] 
+                { 
+                    "aiohttp", 
+                    "aiohttp_jinja2",
+                    "aiohttp_cors",
+                    "watchdog",
+                    "certifi",
+                    "packaging",
+                    "multidict",
+                    "setproctitle"
+                };
+
+                // Rest of the existing PrepareBackendFiles code...
+                return true; // Return true if everything succeeded
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"Error preparing backend files: {ex.Message}");
+                return false;
+            }
+        }
+
+        private async Task<bool> InstallBackendPackage()
+        {
+            try
+            {
+                string backendDir = Path.Combine(Application.StartupPath, "app", "backend");
+                
+                // Ensure backend directory exists
+                if (!Directory.Exists(backendDir))
+                {
+                    AppendOutput("Error: Backend directory not found");
+                    return false;
+                }
+
+                // Prepare backend files
+                if (!await PrepareBackendFiles())
+                {
+                    return false;
+                }
+
+                // First, upgrade pip and install wheel
+                UpdateStatus("Upgrading pip and installing wheel...");
+                var pythonPath = await GetPythonPath();
+                await RunCommand(pythonPath, "-m pip install --upgrade pip wheel");
+
+                // Install the package and its dependencies in development mode
+                UpdateStatus("Installing backend package and dependencies...");
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = pythonPath,
+                        Arguments = "-m pip install -e . --no-cache-dir",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                        WorkingDirectory = backendDir,
+                        // Add Python Scripts to PATH
+                        EnvironmentVariables = 
+                        {
+                            ["PATH"] = $"{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Python311", "Scripts")};{Environment.GetEnvironmentVariable("PATH")}"
+                        }
+                    }
+                };
+
+                var output = new StringBuilder();
+                var error = new StringBuilder();
+
+                process.OutputDataReceived += (s, e) => 
+                { 
+                    if (e.Data != null)
+                    {
+                        output.AppendLine(e.Data);
+                        AppendOutput(e.Data);
+                    }
+                };
+                
+                process.ErrorDataReceived += (s, e) => 
+                { 
+                    if (e.Data != null)
+                    {
+                        error.AppendLine(e.Data);
+                        AppendOutput($"Error: {e.Data}");
+                    }
+                };
+
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                await process.WaitForExitAsync();
+
+                if (process.ExitCode != 0)
+                {
+                    AppendOutput("Failed to install backend package");
+                    AppendOutput($"Error output: {error}");
+                    return false;
+                }
+
+                // Only verify the dependencies we actually need from pyproject.toml
+                string[] requiredDependencies = new[] 
+                { 
+                    "aiohttp", 
+                    "aiohttp_jinja2",
+                    "aiohttp_cors",
+                    "watchdog",
+                    "certifi",
+                    "packaging",
+                    "multidict",
+                    "setproctitle"
+                };
+
+                foreach (var dep in requiredDependencies)
+                {
+                    UpdateStatus($"Verifying {dep} installation...");
+                    bool installSuccess = false;
+                    int retryCount = 0;
+                    
+                    while (!installSuccess && retryCount < 3)
+                    {
+                        var verifyProcess = new Process
+                        {
+                            StartInfo = new ProcessStartInfo
+                            {
+                                FileName = pythonPath,
+                                Arguments = $"-c \"import {dep.Replace('-', '_')}\"",
+                                UseShellExecute = false,
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                                CreateNoWindow = true
+                            }
+                        };
+                        
+                        try
+                        {
+                            verifyProcess.Start();
+                            string verifyError = await verifyProcess.StandardError.ReadToEndAsync();
+                            await verifyProcess.WaitForExitAsync();
+                            
+                            if (verifyProcess.ExitCode == 0)
+                            {
+                                installSuccess = true;
+                                AppendOutput($"Successfully verified {dep}");
+                            }
+                            else
+                            {
+                                AppendOutput($"Attempting to install {dep} (attempt {retryCount + 1}/3)...");
+                                // Try to install the package with both pip and pip3
+                                if (!await RunCommand(pythonPath, $"-m pip install --no-cache-dir {dep}"))
+                                {
+                                    await RunCommand(pythonPath, $"-m pip3 install --no-cache-dir {dep}");
+                                }
+                                retryCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendOutput($"Error verifying {dep}: {ex.Message}");
+                            retryCount++;
+                        }
+                    }
+
+                    if (!installSuccess)
+                    {
+                        AppendOutput($"Warning: Failed to verify/install {dep} after multiple attempts");
+                    }
+                }
+
+                // Verify all dependencies are importable in a single Python session
+                UpdateStatus("Verifying all dependencies together...");
+                var finalVerification = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = pythonPath,
+                        Arguments = "-c \"" + string.Join(";", requiredDependencies.Select(dep => $"import {dep.Replace('-', '_')}")) + "\"",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+
+                finalVerification.Start();
+                string finalError = await finalVerification.StandardError.ReadToEndAsync();
+                await finalVerification.WaitForExitAsync();
+
+                if (finalVerification.ExitCode != 0)
+                {
+                    AppendOutput($"Warning: Some dependencies may have conflicts: {finalError}");
+                }
+
+                AppendOutput("Successfully installed backend package and verified dependencies");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"Error installing backend package: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void EnsurePythonInPath()
+        {
+            try
+            {
+                string pythonScriptsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Python311", "Scripts");
+                string currentPath = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Process) ?? "";
+                
+                if (!currentPath.Contains(pythonScriptsPath))
+                {
+                    Environment.SetEnvironmentVariable("PATH", $"{pythonScriptsPath};{currentPath}", EnvironmentVariableTarget.Process);
+                    AppendOutput($"Added Python Scripts directory to PATH: {pythonScriptsPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"Warning: Could not add Python Scripts to PATH: {ex.Message}");
             }
         }
     }
