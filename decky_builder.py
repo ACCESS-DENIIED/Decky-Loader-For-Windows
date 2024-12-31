@@ -331,6 +331,20 @@ class DeckyBuilder:
         # Create src directory if it doesn't exist
         os.makedirs(self.src_dir, exist_ok=True)
 
+        # Create setup.py for version metadata
+        setup_py_content = f"""
+from setuptools import setup, find_packages
+
+setup(
+    name="decky_loader",
+    version="{self.release.lstrip('v')}",
+    packages=find_packages(),
+    include_package_data=True,
+)
+"""
+        with open(os.path.join(self.src_dir, "setup.py"), "w") as f:
+            f.write(setup_py_content)
+
         # Copy backend files from app/backend/decky_loader to src/decky_loader
         print("Copying backend files...")
         shutil.copytree(os.path.join(self.app_dir, "backend", "decky_loader"), 
@@ -368,49 +382,69 @@ class DeckyBuilder:
         """Install Python requirements"""
         print("Installing Python requirements...")
         try:
+            # Core dependencies that must be installed
+            core_dependencies = [
+                "aiohttp>=3.8.1",
+                "aiohttp_cors>=0.7.0",  # Added missing CORS package
+                "psutil>=5.9.0",
+                "fastapi>=0.78.0",
+                "uvicorn>=0.17.6",
+                "python-multipart>=0.0.5",
+                "watchdog>=2.1.7",
+                "requests>=2.27.1",
+                "setuptools>=60.0.0",
+                "wheel>=0.37.1",
+                "winregistry>=1.1.1; platform_system == 'Windows'",
+                "pywin32>=305; platform_system == 'Windows'",
+                "websockets>=10.3",  # Added websockets
+                "aiosignal>=1.2.0",  # Added aiosignal
+                "typing-extensions>=4.3.0",  # Added typing extensions
+                "yarl>=1.7.2",  # Added yarl
+                "async-timeout>=4.0.2",  # Added async-timeout
+                "frozenlist>=1.3.0",  # Added frozenlist
+                "multidict>=6.0.2",  # Added multidict
+                "attrs>=21.4.0",  # Added attrs
+                "charset-normalizer>=2.1.0",  # Added charset-normalizer
+                "idna>=3.3",  # Added idna
+                "starlette>=0.19.1",  # Added starlette
+                "pydantic>=1.9.1",  # Added pydantic
+                "h11>=0.13.0",  # Added h11
+                "click>=8.1.3",  # Added click
+                "colorama>=0.4.5",  # Added colorama
+                "certifi>=2022.6.15",  # Added certifi
+                "urllib3>=1.26.10",  # Added urllib3
+            ]
+
+            # Install the local package in development mode
+            subprocess.run([
+                sys.executable, "-m", "pip", "install", "-e", str(self.src_dir)
+            ], check=True)
+
+            # Install core dependencies
+            for dep in core_dependencies:
+                try:
+                    subprocess.run([
+                        sys.executable, "-m", "pip", "install", "--user", dep
+                    ], check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"Warning: Failed to install {dep}: {e}")
+                    # Continue with other dependencies even if one fails
+                    continue
+
             # Try both requirements.txt and pyproject.toml
             requirements_file = self.app_dir / "backend" / "requirements.txt"
             pyproject_file = self.app_dir / "backend" / "pyproject.toml"
-            
-            # Windows-specific dependencies for proper cleanup
-            windows_deps = [
-                "pywin32>=305",
-                "psutil>=5.9.0",
-                "winregistry>=1.1.1; platform_system == 'Windows'"
-            ]
-            
+
             if requirements_file.exists():
                 subprocess.run([
                     sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements_file)
                 ], check=True)
-                # Install Windows-specific deps
-                for dep in windows_deps:
-                    subprocess.run([
-                        sys.executable, "-m", "pip", "install", "--user", dep
-                    ], check=True)
             elif pyproject_file.exists():
-                # Install core dependencies directly instead of using poetry
-                dependencies = [
-                    "aiohttp>=3.8.1",
-                    "psutil>=5.9.0",
-                    "fastapi>=0.78.0",
-                    "uvicorn>=0.17.6",
-                    "python-multipart>=0.0.5",
-                    "watchdog>=2.1.7",
-                    "requests>=2.27.1",
-                    "setuptools>=60.0.0",
-                    "wheel>=0.37.1",
-                    "winregistry>=1.1.1; platform_system == 'Windows'",
-                    "pywin32>=305; platform_system == 'Windows'"  # Added for Windows cleanup
-                ]
-                
-                for dep in dependencies:
-                    subprocess.run([
-                        sys.executable, "-m", "pip", "install", "--user", dep
-                    ], check=True)
+                # We've already installed core dependencies above
+                pass
             else:
-                raise Exception("No requirements.txt or pyproject.toml found")
-                
+                print("No requirements.txt or pyproject.toml found, using core dependencies")
+
         except subprocess.CalledProcessError as e:
             raise Exception(f"Failed to install requirements: {str(e)}")
 
