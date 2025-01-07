@@ -11,27 +11,45 @@ def cleanup_mei():
     import psutil
     import win32api
     import win32con
+    import signal
 
     def force_delete_directory(path):
         try:
-            # Get all processes that might have handles to files in the directory
-            for proc in psutil.process_iter(['pid', 'name', 'open_files']):
+            # Set up signal handler for interrupts
+            def signal_handler(signum, frame):
+                return
+            
+            # Register signal handler for CTRL+C
+            signal.signal(signal.SIGINT, signal_handler)
+            
+            # Use a timeout for process iteration to prevent hanging
+            def safe_process_iter():
                 try:
-                    # Check if process has any open files in our target directory
-                    for f in proc.open_files():
-                        if path in f.path:
-                            try:
-                                # Try to close handles gracefully first
-                                proc.open_files().remove(f)
-                            except:
-                                pass
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
+                    for proc in psutil.process_iter(['pid', 'name'], timeout=1):
+                        try:
+                            if proc.is_running():
+                                for f in proc.open_files():
+                                    if path in str(f.path):
+                                        try:
+                                            proc.open_files().remove(f)
+                                        except:
+                                            pass
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, 
+                                psutil.TimeoutExpired):
+                            continue
+                except Exception:
+                    pass
+
+            # Try to release file handles
+            safe_process_iter()
 
             # Set directory attributes to normal
-            win32api.SetFileAttributes(path, win32con.FILE_ATTRIBUTE_NORMAL)
-            
-            # Change permissions to allow deletion
+            try:
+                win32api.SetFileAttributes(path, win32con.FILE_ATTRIBUTE_NORMAL)
+            except:
+                pass
+
+            # Change permissions recursively
             for root, dirs, files in os.walk(path):
                 for d in dirs:
                     try:
@@ -48,33 +66,43 @@ def cleanup_mei():
                     except:
                         pass
 
-            # Remove the directory
-            shutil.rmtree(path, ignore_errors=True)
+            # Remove directory with retries
+            max_retries = 3
+            for i in range(max_retries):
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                    if not os.path.exists(path):
+                        return True
+                except:
+                    if i < max_retries - 1:
+                        time.sleep(1)
+                    continue
+
+            # If still exists, mark for deletion on reboot
+            if os.path.exists(path):
+                try:
+                    win32api.MoveFileEx(
+                        path,
+                        None,
+                        win32con.MOVEFILE_DELAY_UNTIL_REBOOT
+                    )
+                except:
+                    pass
             return True
         except Exception as e:
             print(f"Warning: Failed to remove directory {path}: {e}")
             return False
 
     try:
-        # Get the MEI directory pattern
+        # Wrap the entire cleanup in a try-except
         temp_dir = os.environ.get('TEMP', '')
+        if not temp_dir:
+            return
+
         mei_pattern = os.path.join(temp_dir, '_MEI*')
-        
-        # Find and remove all MEI directories
         for mei_dir in glob.glob(mei_pattern):
             if os.path.exists(mei_dir):
                 force_delete_directory(mei_dir)
-                # Double check if it's gone
-                if os.path.exists(mei_dir):
-                    # If still exists, try to mark it for deletion on reboot
-                    try:
-                        win32api.MoveFileEx(
-                            mei_dir,
-                            None,
-                            win32con.MOVEFILE_DELAY_UNTIL_REBOOT
-                        )
-                    except:
-                        pass
     except Exception as e:
         print(f"Warning: Error during MEI cleanup: {e}")
 
@@ -517,27 +545,45 @@ def cleanup_mei():
     import psutil
     import win32api
     import win32con
+    import signal
 
     def force_delete_directory(path):
         try:
-            # Get all processes that might have handles to files in the directory
-            for proc in psutil.process_iter(['pid', 'name', 'open_files']):
+            # Set up signal handler for interrupts
+            def signal_handler(signum, frame):
+                return
+            
+            # Register signal handler for CTRL+C
+            signal.signal(signal.SIGINT, signal_handler)
+            
+            # Use a timeout for process iteration to prevent hanging
+            def safe_process_iter():
                 try:
-                    # Check if process has any open files in our target directory
-                    for f in proc.open_files():
-                        if path in f.path:
-                            try:
-                                # Try to close handles gracefully first
-                                proc.open_files().remove(f)
-                            except:
-                                pass
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
+                    for proc in psutil.process_iter(['pid', 'name'], timeout=1):
+                        try:
+                            if proc.is_running():
+                                for f in proc.open_files():
+                                    if path in str(f.path):
+                                        try:
+                                            proc.open_files().remove(f)
+                                        except:
+                                            pass
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, 
+                                psutil.TimeoutExpired):
+                            continue
+                except Exception:
+                    pass
+
+            # Try to release file handles
+            safe_process_iter()
 
             # Set directory attributes to normal
-            win32api.SetFileAttributes(path, win32con.FILE_ATTRIBUTE_NORMAL)
-            
-            # Change permissions to allow deletion
+            try:
+                win32api.SetFileAttributes(path, win32con.FILE_ATTRIBUTE_NORMAL)
+            except:
+                pass
+
+            # Change permissions recursively
             for root, dirs, files in os.walk(path):
                 for d in dirs:
                     try:
@@ -554,33 +600,43 @@ def cleanup_mei():
                     except:
                         pass
 
-            # Remove the directory
-            shutil.rmtree(path, ignore_errors=True)
+            # Remove directory with retries
+            max_retries = 3
+            for i in range(max_retries):
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                    if not os.path.exists(path):
+                        return True
+                except:
+                    if i < max_retries - 1:
+                        time.sleep(1)
+                    continue
+
+            # If still exists, mark for deletion on reboot
+            if os.path.exists(path):
+                try:
+                    win32api.MoveFileEx(
+                        path,
+                        None,
+                        win32con.MOVEFILE_DELAY_UNTIL_REBOOT
+                    )
+                except:
+                    pass
             return True
         except Exception as e:
             print(f"Warning: Failed to remove directory {path}: {e}")
             return False
 
     try:
-        # Get the MEI directory pattern
+        # Wrap the entire cleanup in a try-except
         temp_dir = os.environ.get('TEMP', '')
+        if not temp_dir:
+            return
+
         mei_pattern = os.path.join(temp_dir, '_MEI*')
-        
-        # Find and remove all MEI directories
         for mei_dir in glob.glob(mei_pattern):
             if os.path.exists(mei_dir):
                 force_delete_directory(mei_dir)
-                # Double check if it's gone
-                if os.path.exists(mei_dir):
-                    # If still exists, try to mark it for deletion on reboot
-                    try:
-                        win32api.MoveFileEx(
-                            mei_dir,
-                            None,
-                            win32con.MOVEFILE_DELAY_UNTIL_REBOOT
-                        )
-                    except:
-                        pass
     except Exception as e:
         print(f"Warning: Error during MEI cleanup: {e}")
 
