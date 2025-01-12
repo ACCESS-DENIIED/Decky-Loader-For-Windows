@@ -4,7 +4,6 @@ A Work-in-progress installer for Decky Loader on Windows. This tool automates th
 
 ## Features
 - 🚀 1-Click installation
-- ⚙️ Automatic dependency management (Node.js, npm, pnpm, Python)
 - 🔧 Configures Steam for plugin development (-dev arg)
 - 🏃‍♂️ Sets up autostart for PluginLoader
 - 📁 Creates proper homebrew directory structure
