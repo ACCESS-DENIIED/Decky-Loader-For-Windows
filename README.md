@@ -1,19 +1,18 @@
 # Decky Loader for Windows
 
-A Work-in-progress Python-based installer and build system for Decky Loader on Windows. This tool automates the entire process of building, installing, and configuring Decky Loader - bringing the Steam Deck's popular plugin system to Windows.
+A Work-in-progress installer for Decky Loader on Windows. This tool automates the process of downloading and configuring Decky Loader - bringing the Steam Deck's popular plugin system to Windows.
 
 ## Features
-- 🚀 Simple installation and build process
-- ⚙️ Automatic dependency management (Node.js, npm, pnpm, Python)
-- 🔧 Configures Steam for plugin development
+- 🚀 1-Click installation
+- 🔧 Configures Steam for plugin development (-dev arg)
 - 🏃‍♂️ Sets up autostart for PluginLoader
 - 📁 Creates proper homebrew directory structure
-- 💻 Builds both console and GUI executables
+- 💻 Installs console and GUI executables
 
 ## Requirements
 - Windows 10/11
 - Steam installation
-- Internet connection for downloading dependencies
+- Internet connection
 
 ## Usage
-Download files / zip, run "install_decky.bat" and follow the prompts.
+Download the latest release and run "Decky Loader Installer.exe",
