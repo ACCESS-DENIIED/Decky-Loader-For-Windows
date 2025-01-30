@@ -9,6 +9,17 @@ A Work-in-progress installer for Decky Loader on Windows. This tool automates th
 - 📁 Creates proper homebrew directory structure
 - 💻 Installs console and GUI executables
 
+## Working Plugins on Windows
+- Audio Loader
+- CSS Loader
+- IsThereAnyDeal For Deck
+- PlayCount
+- PlayTime
+- ProtonDB Badges
+- SteamGridDB
+- TabMaster
+- Web Browser
+
 ## Requirements
 - Windows 10/11
 - Steam installation
