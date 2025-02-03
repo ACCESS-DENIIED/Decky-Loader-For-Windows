@@ -41,6 +41,9 @@ namespace DeckyInstaller
 
             try
             {
+                // Kill any existing PluginLoader processes
+                KillExistingPluginLoaders();
+
                 // Step 1: Create .cef-enable-remote-debugging file
                 UpdateStatus("Setting up Steam CEF debugging...");
                 if (!await SetupSteamDebug())
@@ -215,6 +218,7 @@ namespace DeckyInstaller
                     throw new Exception("PluginLoader_noconsole.exe not found");
                 }
 
+                // Create startup shortcut
                 string startupFolder = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.Startup)
                 );
@@ -243,6 +247,17 @@ namespace DeckyInstaller
                 if (process?.ExitCode == 0)
                 {
                     AppendOutput("Created autostart entry");
+                    
+                    // Start the process immediately
+                    var pluginLoaderProcess = new ProcessStartInfo
+                    {
+                        FileName = pluginLoader,
+                        WorkingDirectory = servicesDir,
+                        UseShellExecute = true
+                    };
+                    Process.Start(pluginLoaderProcess);
+                    AppendOutput("Started PluginLoader_noconsole.exe");
+                    
                     return true;
                 }
                 else
@@ -284,7 +299,6 @@ namespace DeckyInstaller
 
                 if (string.IsNullOrEmpty(steamPath))
                 {
-                    // Try default Steam path if registry lookup failed
                     steamPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam");
                 }
 
@@ -293,7 +307,6 @@ namespace DeckyInstaller
                     throw new Exception("Steam installation directory not found");
                 }
 
-                // Create .cef-enable-remote-debugging file
                 string debugFile = Path.Combine(steamPath, ".cef-enable-remote-debugging");
                 File.WriteAllText(debugFile, "");
                 AppendOutput("Created .cef-enable-remote-debugging file");
@@ -329,6 +342,42 @@ namespace DeckyInstaller
             {
                 AppendOutput($"Error creating directories: {ex.Message}");
                 return false;
+            }
+        }
+
+        private void KillExistingPluginLoaders()
+        {
+            try
+            {
+                foreach (var process in Process.GetProcessesByName("PluginLoader"))
+                {
+                    try
+                    {
+                        process.Kill();
+                        AppendOutput("Terminated PluginLoader.exe process");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendOutput($"Warning: Could not terminate PluginLoader.exe: {ex.Message}");
+                    }
+                }
+
+                foreach (var process in Process.GetProcessesByName("PluginLoader_noconsole"))
+                {
+                    try
+                    {
+                        process.Kill();
+                        AppendOutput("Terminated PluginLoader_noconsole.exe process");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendOutput($"Warning: Could not terminate PluginLoader_noconsole.exe: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"Warning: Error while checking for existing processes: {ex.Message}");
             }
         }
 
